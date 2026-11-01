@@ -355,7 +355,9 @@ def main():
         if cache:
             pd.to_pickle(px, cache)
     bench = px.pop("0050.TW", None)
-    if bench is None or bench.index[-1].date() != today:
+    if bench is None or len(px) < 500:
+        print(f"ERROR 股價下載失敗（0050 {'沒抓到' if bench is None else '有'}，個股 {len(px)} 檔）"); sys.exit(2)
+    if bench.index[-1].date() != today:
         print(f"NO_NEW_DATA {today} 沒有新的交易資料（休市或資料未更新），不執行"); sys.exit(3)
     T = pd.Timestamp(today)
     b_close = bench.Close

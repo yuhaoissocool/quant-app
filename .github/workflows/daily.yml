@@ -1,0 +1,66 @@
+name: 每日虛擬交易
+
+on:
+  schedule:
+    - cron: "13 11 * * 1-5"   # 台灣時間週一到週五 19:13（GitHub 排程可能延遲 5～30 分鐘）
+  workflow_dispatch: {}        # 可以在 Actions 頁面手動按 Run
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TZ: Asia/Taipei
+      APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安裝套件與中文字型
+        run: |
+          pip install -q yfinance pandas numpy requests matplotlib cryptography
+          sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
+
+      - name: 解密帳戶狀態
+        run: |
+          mkdir -p run
+          python tools/box.py dec state.enc.json run/state.json
+
+      - name: 跑今天的虛擬交易
+        id: trade
+        run: |
+          set +e
+          python strategy/daily_paper.py --state run/state.json --post 2>&1 | grep -v -i "possibly delisted\|failed download\|crumb" | tee run/log.txt
+          code=${PIPESTATUS[0]}
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = "3" ] || [ "$code" = "4" ]; then echo "今天不用跑（休市或已跑過）"; exit 0; fi
+          exit $code
+
+      - name: 加密並存回 repo
+        if: steps.trade.outputs.code == '0'
+        run: |
+          python tools/box.py enc run/state.json state.enc.json
+          python tools/box.py app run/equity.json run/book.json data.enc.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.enc.json data.enc.json
+          git commit -m "每日資料更新 $(date +%F)"
+          git push
+
+      - name: 失敗通知
+        if: failure()
+        run: |
+          msg="⚠️ 今天的虛擬交易執行失敗，請到 GitHub Actions 查看：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -s -H "Content-Type: application/json" -d "{\"content\": \"$msg\"}" "$DISCORD_WEBHOOK" > /dev/null

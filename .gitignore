@@ -1,0 +1,10 @@
+# 明文檔案一律不進 repo（只放加密後的 .enc.json）
+run/
+state.json
+equity.json
+book.json
+report.png
+*.pkl
+.finmind_token
+.discord_webhook
+__pycache__/

@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>量化帳戶</title>
+<meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="量化帳戶">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+  /* 版面：手機單欄，一屏看到總覽＋曲線，下面分頁切換明細 */
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --line: #e3e5ea; --fg: #14161a; --muted: #6b717c;
+    --up: #e5383b; --down: #12a150; --acc: #5b5bd6; --acc-soft: #ececfb;
+    --s1: #5b5bd6; --s2: #e08a1e; --s3: #1f9bb5; --s4: #9aa0a8;
+    --font: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+    --num: ui-monospace, "SF Mono", "Roboto Mono", Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --panel: #181b21; --line: #2a2e36; --fg: #eceef2; --muted: #8e95a1;
+      --up: #ff5c5c; --down: #3ecf7a; --acc: #9b9bff; --acc-soft: #23233a;
+      --s1: #9b9bff; --s2: #f2a64a; --s3: #4cc3dc; --s4: #6d737d; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font); -webkit-text-size-adjust: 100%; }
+  body { padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 0px)) calc(24px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  button { font: inherit; color: inherit; }
+  .num { font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); } .down { color: var(--down); } .flat { color: var(--muted); }
+
+  /* 鎖定畫面 */
+  #lock { min-height: 80vh; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  #lock h1 { font-size: 28px; margin: 0; letter-spacing: .02em; }
+  #lock p { margin: 0; color: var(--muted); line-height: 1.6; }
+  #lock input { width: 100%; font-size: 17px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+  #lock input:focus-visible, button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+  .btn { padding: 14px 16px; border-radius: 12px; border: 0; background: var(--acc); color: #fff; font-weight: 600; font-size: 16px; }
+  #err { color: var(--up); min-height: 1.4em; font-size: 14px; }
+
+  /* 主畫面 */
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 0 10px; }
+  header h1 { font-size: 22px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .icon-btn { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; color: var(--muted); }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; min-width: 0; }
+  .tile .lab { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .tile .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tile .big { font-size: 26px; font-weight: 650; margin-top: 4px; letter-spacing: -.01em; }
+  .tile .val { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-top: 12px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; }
+  .card .note { font-size: 12.5px; color: var(--muted); margin: 0 0 8px; }
+  #chart { position: relative; }
+  #chart svg { display: block; width: 100%; height: auto; }
+  .tabs { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 4px; gap: 4px; margin-top: 12px; }
+  .tabs button { border: 0; background: transparent; padding: 9px 0; border-radius: 9px; font-size: 14px; color: var(--muted); }
+  .tabs button[aria-selected="true"] { background: var(--acc-soft); color: var(--acc); font-weight: 600; }
+  .list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .item { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .item .name { font-size: 15.5px; font-weight: 600; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--acc-soft); color: var(--acc); white-space: nowrap; }
+  .badge.sell { background: color-mix(in srgb, var(--down) 15%, transparent); color: var(--down); }
+  .badge.buy { background: color-mix(in srgb, var(--up) 15%, transparent); color: var(--up); }
+  .item .right { text-align: right; font-size: 16px; font-weight: 650; align-self: center; }
+  .item .meta { grid-column: 1 / -1; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .empty { color: var(--muted); font-size: 14px; padding: 18px 4px; text-align: center; }
+  .foot { color: var(--muted); font-size: 12px; text-align: center; margin-top: 18px; line-height: 1.6; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section id="lock">
+    <h1>量化帳戶</h1>
+    <p>資料有加密，請輸入密碼。手機會記住，下次打開就不用再輸入。</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="密碼" aria-label="密碼">
+    <button class="btn" id="unlock">解鎖</button>
+    <div id="err" role="alert"></div>
+  </section>
+
+  <main id="app" hidden>
+    <header>
+      <div>
+        <h1>量化帳戶</h1>
+        <div class="sub" id="asof">—</div>
+      </div>
+      <button class="icon-btn" id="lockbtn" aria-label="鎖定並清除密碼">鎖定</button>
+    </header>
+
+    <section class="tiles" id="tiles"></section>
+
+    <section class="card">
+      <h2>三條路線 vs 0050</h2>
+      <p class="note">都從 10 萬元起算，紅色是賺、綠色是賠</p>
+      <div id="chart"></div>
+    </section>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="hold" aria-selected="true">持股</button>
+      <button role="tab" data-tab="todo" aria-selected="false">明日委託</button>
+      <button role="tab" data-tab="done" aria-selected="false">交易紀錄</button>
+    </nav>
+    <section class="list" id="list"></section>
+
+    <p class="foot">A 改良突破｜B 月換股｜A+B 各半<br>每個交易日晚上約 7:30 更新，虛擬交易，非投資建議</p>
+  </main>
+</div>
+
+<script>
+const CAP = 100000;
+const ROUTES = [
+  { key: 'A', label: 'A 改良突破', color: 'var(--s2)' },
+  { key: 'B', label: 'B 月換股', color: 'var(--s3)' },
+  { key: 'A+B', label: 'A+B 各半', color: 'var(--s1)' },
+  { key: 'bench', label: '0050', color: 'var(--s4)' },
+];
+const $ = (s) => document.querySelector(s);
+const fmtInt = (v) => Math.round(v).toLocaleString('zh-TW');
+const fmtPct = (v, d = 2) => (v > 0 ? '+' : '') + (v * 100).toFixed(d) + '%';
+const cls = (v) => (v > 0 ? 'up' : v < 0 ? 'down' : 'flat');
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'class') n.className = v; else if (k === 'text') n.textContent = v; else n.setAttribute(k, v);
+  }
+  kids.flat().forEach((c) => c != null && n.append(c));
+  return n;
+};
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+  del: (k) => { try { localStorage.removeItem(k); } catch {} },
+};
+
+// ---------- 解密 ----------
+const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+async function decrypt(pw) {
+  const r = await fetch('data.enc.json?t=' + Date.now(), { cache: 'no-store' });
+  if (!r.ok) throw new Error('fetch');
+  const box = await r.json();
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(box.salt), iterations: box.iter, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(box.iv) }, key, b64(box.ct));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+async function open(pw, remember) {
+  $('#err').textContent = '';
+  $('#unlock').disabled = true; $('#unlock').textContent = '解鎖中…';
+  try {
+    const data = await decrypt(pw);
+    if (remember) store.set('qa_pw', pw);
+    $('#lock').hidden = true; $('#app').hidden = false;
+    render(data);
+  } catch (e) {
+    $('#err').textContent = e.message === 'fetch' ? '讀不到資料，請確認網路後再試一次。' : '密碼不對，請再試一次。';
+    store.del('qa_pw');
+    $('#lock').hidden = false; $('#app').hidden = true;
+  } finally {
+    $('#unlock').disabled = false; $('#unlock').textContent = '解鎖';
+  }
+}
+$('#unlock').addEventListener('click', () => open($('#pw').value, true));
+$('#pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') open($('#pw').value, true); });
+$('#lockbtn').addEventListener('click', () => { store.del('qa_pw'); location.reload(); });
+
+// ---------- 畫面 ----------
+let DATA = null, TAB = store.get('qa_tab') || 'hold';
+function render(d) {
+  DATA = d;
+  const eq = d.equity, last = eq[eq.length - 1];
+  $('#asof').textContent = last ? `資料日 ${last.date}｜更新 ${d.generated.slice(0, 16).replace('T', ' ')}` : '尚無資料';
+  const tiles = $('#tiles'); tiles.replaceChildren();
+  ROUTES.forEach((r) => {
+    const v = last ? Number(last[r.key]) : CAP, ret = v / CAP - 1;
+    tiles.append(el('div', { class: 'tile' },
+      el('div', { class: 'lab' }, el('span', { class: 'dot', style: `background:${r.color}` }), r.label),
+      el('div', { class: 'big num ' + cls(ret), text: fmtPct(ret) }),
+      el('div', { class: 'val num', text: fmtInt(v) + ' 元' })));
+  });
+  drawChart(eq);
+  setTab(TAB);
+}
+
+function drawChart(eq) {
+  const box = $('#chart'); box.replaceChildren();
+  if (!eq.length) return;
+  const W = Math.max(300, box.clientWidth || 340), H = 200, L = 44, R = 64, T = 10, B = 24;
+  const xs = eq.map((r) => new Date(r.date + 'T00:00:00'));
+  const vals = eq.flatMap((r) => ROUTES.map((s) => Number(r[s.key])));
+  let lo = Math.min(...vals, CAP), hi = Math.max(...vals, CAP);
+  if (hi - lo < 4000) { lo -= 2000; hi += 2000; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const x0 = +xs[0], x1 = +xs[xs.length - 1];
+  const X = (d) => (x1 === x0 ? (L + W - R) / 2 : L + (+d - x0) / (x1 - x0) * (W - L - R));
+  const Y = (v) => T + (hi - v) / (hi - lo) * (H - T - B);
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const add = (tag, a, text) => { const n = document.createElementNS(NS, tag); for (const k in a) n.setAttribute(k, a[k]); if (text != null) n.textContent = text; svg.append(n); return n; };
+  const step = niceStep((hi - lo) / 4);
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    add('line', { x1: L, x2: W - R, y1: Y(v), y2: Y(v), stroke: 'var(--line)', 'stroke-width': 1 });
+    add('text', { x: L - 6, y: Y(v), 'text-anchor': 'end', 'dominant-baseline': 'middle', 'font-size': 10.5, fill: 'var(--muted)' }, (v / 10000).toFixed(v % 10000 ? 1 : 0) + '萬');
+  }
+  add('line', { x1: L, x2: W - R, y1: Y(CAP), y2: Y(CAP), stroke: 'var(--muted)', 'stroke-dasharray': '3 4', 'stroke-width': 1 });
+  const fmtD = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+  add('text', { x: X(xs[0]), y: H - 6, 'font-size': 10.5, fill: 'var(--muted)', 'text-anchor': xs.length > 1 ? 'start' : 'middle' }, fmtD(xs[0]));
+  if (xs.length > 1) add('text', { x: X(xs[xs.length - 1]), y: H - 6, 'font-size': 10.5, fill: 'var(--muted)', 'text-anchor': 'end' }, fmtD(xs[xs.length - 1]));
+  const ends = [];
+  [...ROUTES].reverse().forEach((s) => {
+    const pts = eq.map((r, i) => [X(xs[i]), Y(Number(r[s.key]))]);
+    if (pts.length > 1) add('polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: 'none', stroke: s.color, 'stroke-width': s.key === 'A+B' ? 2.5 : 1.8, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' });
+    const p = pts[pts.length - 1];
+    add('circle', { cx: p[0], cy: p[1], r: 3.2, fill: s.color });
+    ends.push({ y: p[1], x: p[0], s, v: Number(eq[eq.length - 1][s.key]) });
+  });
+  ends.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i - 1].y < 12) ends[i].y = ends[i - 1].y + 12;
+  ends.forEach((e) => add('text', { x: W - R + 8, y: e.y, 'dominant-baseline': 'middle', 'font-size': 10.5, fill: e.s.color, 'font-weight': 600 }, e.s.key === 'bench' ? '0050' : e.s.key));
+  box.append(svg);
+}
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw / p;
+  return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p;
+}
+
+function setTab(t) {
+  TAB = t; store.set('qa_tab', t);
+  document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
+  const list = $('#list'); list.replaceChildren();
+  const book = DATA ? DATA.book : [];
+  const pick = { hold: '持股', todo: '明日候選', done: '已出場' }[t];
+  let rows = book.filter((r) => r.kind === pick);
+  if (t === 'todo') rows = rows.concat(book.filter((r) => r.kind === '持股' && String(r.note).startsWith('明天開盤賣')));
+  if (t === 'done') rows = rows.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+  if (!rows.length) {
+    list.append(el('div', { class: 'empty', text: { hold: '目前三條路線都空手。', todo: '明天開盤沒有要做的事。', done: '還沒有出場的交易。' }[t] }));
+    return;
+  }
+  rows.forEach((r) => {
+    const name = el('div', { class: 'name' }, el('span', { class: 'badge', text: r.line }), `${r.code} ${r.name}`);
+    let right = '', meta = '';
+    if (t === 'hold') {
+      right = el('div', { class: 'right num ' + cls(r.ret), text: fmtPct(r.ret, 1) });
+      meta = `${fmtInt(r.shares)} 股｜成本 ${r.entry} → 現價 ${r.price}｜${r.note}`;
+    } else if (t === 'todo') {
+      const sell = r.kind === '持股';
+      name.prepend(el('span', { class: 'badge ' + (sell ? 'sell' : 'buy'), text: sell ? '賣出' : '買進候選' }));
+      right = el('div', { class: 'right num', text: sell ? `${fmtInt(r.shares)} 股` : `收 ${r.price}` });
+      meta = sell ? r.note.replace('明天開盤賣', '明天開盤賣出') : r.note;
+    } else {
+      right = el('div', { class: 'right num ' + cls(r.ret), text: fmtPct(r.ret, 1) });
+      meta = `${r.date} 賣出 @ ${r.price}｜${r.note}`;
+    }
+    list.append(el('div', { class: 'item' }, name, right, el('div', { class: 'meta', text: meta })));
+  });
+}
+document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => DATA && drawChart(DATA.equity), 150); });
+
+// 回到前景時重新抓最新資料
+document.addEventListener('visibilitychange', () => { const pw = store.get('qa_pw'); if (!document.hidden && pw && DATA) decrypt(pw).then(render).catch(() => {}); });
+
+const saved = store.get('qa_pw');
+if (saved) open(saved, false); else $('#pw').focus();
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>

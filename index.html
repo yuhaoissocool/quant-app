@@ -93,7 +93,6 @@
         <h1>量化帳戶</h1>
         <div class="sub" id="asof">—</div>
       </div>
-      <button class="icon-btn" id="lockbtn" aria-label="鎖定並清除密碼">鎖定</button>
     </header>
 
     <section class="tiles" id="tiles"></section>
@@ -172,7 +171,6 @@ async function open(pw, remember) {
 }
 $('#unlock').addEventListener('click', () => open($('#pw').value, true));
 $('#pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') open($('#pw').value, true); });
-$('#lockbtn').addEventListener('click', () => { store.del('qa_pw'); location.reload(); });
 
 // ---------- 畫面 ----------
 let DATA = null, TAB = store.get('qa_tab') || 'hold';

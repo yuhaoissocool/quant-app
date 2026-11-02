@@ -98,14 +98,17 @@ def load_prices(tickers, start, end):
 def revenue_ok(sid, asof, fm_headers):
     """回傳 (是否通過, yoy, 營收月份字串)。只用 asof 當天已公布的月營收。"""
     start = (asof - timedelta(days=365 * 3 + 60)).isoformat()
-    for _ in range(3):
+    r = None
+    for _ in range(4):
         try:
             r = requests.get(FM_URL, params={"dataset": "TaiwanStockMonthRevenue", "data_id": sid,
                                              "start_date": start}, headers=fm_headers, timeout=60).json()
-            break
         except Exception:
-            time.sleep(10)
-    else:
+            time.sleep(10); continue
+        if "upper limit" in str(r.get("msg")):      # 額度用完：等一下再試
+            print("FinMind 額度暫時用完，等 70 秒再試", sid); time.sleep(70); continue
+        break
+    if r is None:
         return None, None, None
     if r.get("msg") != "success":
         print("FinMind 失敗：", sid, r.get("msg"))
@@ -351,7 +354,7 @@ def main():
         px = {t: d.loc[:pd.Timestamp(today)] for t, d in pd.read_pickle(cache).items()}
     else:
         px = load_prices(tickers + ["0050.TW"], (today - timedelta(days=560)).isoformat(),
-                         (today + timedelta(days=1)).isoformat())
+                         (max(today, datetime.now(TW).date()) + timedelta(days=1)).isoformat())
         if cache:
             pd.to_pickle(px, cache)
     bench = px.pop("0050.TW", None)

@@ -2,7 +2,11 @@ name: 每日虛擬交易
 
 on:
   schedule:
-    - cron: "13 11 * * 1-5"   # 台灣時間週一到週五 19:13（GitHub 排程可能延遲 5～30 分鐘）
+    # GitHub 的排程偶爾會整個漏掉，所以排好幾次；已經跑過的日子會自動略過
+    - cron: "13 11 * * 1-5"   # 台灣 19:13
+    - cron: "47 12 * * 1-5"   # 台灣 20:47
+    - cron: "17 14 * * 1-5"   # 台灣 22:17
+    - cron: "37 23 * * 1-5"   # 台灣隔天 07:37（補跑前一個交易日）
   workflow_dispatch: {}        # 可以在 Actions 頁面手動按 Run
 
 permissions:
@@ -38,18 +42,34 @@ jobs:
           mkdir -p run
           python tools/box.py dec state.enc.json run/state.json
 
-      - name: 跑今天的虛擬交易
+      - name: 跑虛擬交易（含補跑漏掉的交易日）
         id: trade
+        env:
+          PX_CACHE: run/px.pkl
         run: |
           set +e
-          python strategy/daily_paper.py --state run/state.json --post 2>&1 | grep -v -i "possibly delisted\|failed download\|crumb" | tee run/log.txt
-          code=${PIPESTATUS[0]}
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          if [ "$code" = "3" ] || [ "$code" = "4" ]; then echo "今天不用跑（休市或已跑過）"; exit 0; fi
-          exit $code
+          last=$(python -c "import json;print(json.load(open('run/state.json'))['last_run'] or '2026-10-30')")
+          days=$(python -c "
+          import datetime as dt
+          d=dt.date.fromisoformat('$last')+dt.timedelta(days=1); t=dt.date.today(); out=[]
+          while d<=t:
+              out.append(d.isoformat()) if d.weekday()<5 else None
+              d+=dt.timedelta(days=1)
+          print(' '.join(out[-10:]))")
+          echo "上次執行：$last；要處理的日子：${days:-（無）}"
+          ran=0
+          for d in $days; do
+            echo "=== $d ==="
+            python strategy/daily_paper.py --state run/state.json --asof "$d" --post 2>&1 | grep -v -i "possibly delisted\|failed download\|crumb"
+            code=${PIPESTATUS[0]}
+            if [ "$code" = "0" ]; then ran=1
+            elif [ "$code" = "3" ] || [ "$code" = "4" ]; then echo "$d 不用跑（休市、資料還沒出來或已跑過）"
+            else echo "$d 執行失敗（$code）"; echo "ran=$ran" >> "$GITHUB_OUTPUT"; exit 1; fi
+          done
+          echo "ran=$ran" >> "$GITHUB_OUTPUT"
 
       - name: 加密並存回 repo
-        if: steps.trade.outputs.code == '0'
+        if: steps.trade.outputs.ran == '1'
         run: |
           python tools/box.py enc run/state.json state.enc.json
           python tools/box.py app run/equity.json run/book.json data.enc.json
@@ -58,6 +78,15 @@ jobs:
           git add state.enc.json data.enc.json
           git commit -m "每日資料更新 $(date +%F)"
           git push
+
+      - name: 失敗時也存回已經跑完的日子
+        if: failure() && steps.trade.outputs.ran == '1'
+        run: |
+          python tools/box.py enc run/state.json state.enc.json
+          python tools/box.py app run/equity.json run/book.json data.enc.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.enc.json data.enc.json && git commit -m "每日資料更新 $(date +%F)（部分）" && git push
 
       - name: 失敗通知
         if: failure()

@@ -339,6 +339,10 @@ def main():
     tok = secret("FINMIND_TOKEN", ".finmind_token")
     fmh = {"Authorization": "Bearer " + tok} if tok else {}
     today = date.fromisoformat(a.asof) if a.asof else datetime.now(TW).date()
+    now_tw = datetime.now(TW)
+    if today > now_tw.date() or (today == now_tw.date() and (now_tw.hour, now_tw.minute) < (14, 30)):
+        # 台股 13:30 收盤，資料商通常 14:00 後才有完整收盤價；太早跑會拿到盤中價格
+        print(f"NO_NEW_DATA {today} 還沒收盤或收盤資料還沒出來（現在 {now_tw:%H:%M}），不執行"); sys.exit(3)
 
     st = json.load(open(a.state)) if os.path.exists(a.state) else {}
     if st.get("version") != 3:          # 新帳戶（舊版 → 重新開始）
@@ -357,13 +361,20 @@ def main():
                          (max(today, datetime.now(TW).date()) + timedelta(days=1)).isoformat())
         if cache:
             pd.to_pickle(px, cache)
+    px = {t: d.loc[:pd.Timestamp(today)] for t, d in px.items()}   # 只用到 today 為止的資料（補跑舊日子時很重要）
+    px = {t: d for t, d in px.items() if len(d)}
     bench = px.pop("0050.TW", None)
     if bench is None or len(px) < 500:
         print(f"ERROR 股價下載失敗（0050 {'沒抓到' if bench is None else '有'}，個股 {len(px)} 檔）"); sys.exit(2)
-    if bench.index[-1].date() != today:
-        print(f"NO_NEW_DATA {today} 沒有新的交易資料（休市或資料未更新），不執行"); sys.exit(3)
     T = pd.Timestamp(today)
-    b_close = bench.Close
+    # 用「有多少檔股票今天有成交」判斷是不是交易日（Yahoo 的 0050 偶爾會缺某一天）
+    n_today = sum(1 for d in px.values() if len(d) and d.index[-1] == T)
+    if n_today < 300:
+        print(f"NO_NEW_DATA {today} 沒有新的交易資料（休市或資料未更新，今天有資料 {n_today} 檔），不執行"); sys.exit(3)
+    b_close = bench.Close.loc[:T]
+    if b_close.index[-1] != T:          # 0050 缺今天：用前一天收盤補上，並提醒
+        print(f"⚠️ 0050 缺 {today} 的收盤價，暫用 {b_close.index[-1].date()} 的收盤價")
+        b_close = pd.concat([b_close, pd.Series([b_close.iloc[-1]], index=[T])])
 
     def bar(t):
         d = px.get(t)

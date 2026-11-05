@@ -42,6 +42,7 @@ def secret(env, fname):
 
 
 # ---------------- 資料 ----------------
+FM_WARN = []   # FinMind 的問題，會顯示在日報裡
 UNIVERSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "universe.json")
 
 
@@ -72,6 +73,8 @@ def universe(fm_headers):
             break
         except Exception as e:
             print(f"FinMind 清單失敗（第 {k + 1} 次）：", e); time.sleep(20)
+            if k == 2:
+                FM_WARN.append(f"⚠️ FinMind 連線失敗（{'有' if fm_headers else '沒有'}用 token）：{str(e)[:80]}")
     backup = json.load(open(UNIVERSE_FILE)) if os.path.exists(UNIVERSE_FILE) else {}
     if len(names) < 1500:
         print(f"⚠️ 線上股票清單不完整（{len(names)} 檔），用備份清單補（{len(backup)} 檔）")
@@ -467,7 +470,7 @@ def main():
                          f"｜量 {c['vol_ratio']:.1f} 倍｜營收 YoY {yoy:+.0%}")
         (failedA if ok is None else passedA if ok else rejectedA).append(c)
         time.sleep(0.5)
-    notesA = [f"今日突破且量>2倍 {len(cands)} 檔，通過營收篩選 {len(passedA)} 檔"
+    notesA = FM_WARN + [f"今日突破且量>2倍 {len(cands)} 檔，通過營收篩選 {len(passedA)} 檔"
               + (f"；未通過：{', '.join(code(c['ticker']) + c['name'] for c in rejectedA[:6])}" if rejectedA else "")]
     if failedA:
         notesA.append(f"⚠️ {len(failedA)} 檔抓不到月營收，今天略過：" + ", ".join(code(c['ticker']) + c['name'] for c in failedA[:6]))

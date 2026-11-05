@@ -37,6 +37,19 @@ jobs:
           pip install -q yfinance pandas numpy requests matplotlib cryptography
           sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk > /dev/null
 
+      - name: 檢查 FinMind token
+        run: |
+          python - <<'PY'
+          import os, requests
+          tok = os.environ.get("FINMIND_TOKEN", "").strip()
+          if not tok:
+              print("沒有設定 FINMIND_TOKEN，會用匿名額度")
+          else:
+              r = requests.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"},
+                               headers={"Authorization": "Bearer " + tok}, timeout=60).json()
+              print("FinMind token 檢查：", r.get("msg"), "（token 長度", len(tok), "）")
+          PY
+
       - name: 解密帳戶狀態
         run: |
           mkdir -p run

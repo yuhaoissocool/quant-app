@@ -42,29 +42,42 @@ def secret(env, fname):
 
 
 # ---------------- 資料 ----------------
+UNIVERSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "universe.json")
+
+
 def universe(fm_headers):
-    """回傳 {ticker: 名稱}"""
+    """回傳 {ticker: 名稱}。來源：證交所＋FinMind，抓不到就用 repo 裡的備份清單 universe.json。"""
     names = {}
-    try:
-        r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=30).json()
-        for d in r:
-            if len(d["Code"]) == 4 and d["Code"][0] != "0":
-                names[d["Code"] + ".TW"] = d["Name"]
-    except Exception as e:
-        print("上市清單失敗：", e)
-    try:
-        r = requests.get(FM_URL, params={"dataset": "TaiwanStockInfo"}, headers=fm_headers, timeout=60).json()["data"]
-        for d in r:
-            sid = d["stock_id"]
-            if len(sid) == 4 and sid.isdigit() and sid[0] != "0":
-                if d["type"] == "tpex":
-                    names[sid + ".TWO"] = d["stock_name"]
-                elif d["type"] == "twse" and sid + ".TW" not in names:
-                    names[sid + ".TW"] = d["stock_name"]
-    except Exception as e:
-        print("FinMind 清單失敗：", e)
+    for k in range(3):
+        try:
+            r = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=30).json()
+            for d in r:
+                if len(d["Code"]) == 4 and d["Code"].isdigit() and d["Code"][0] != "0":
+                    names[d["Code"] + ".TW"] = d["Name"]
+            break
+        except Exception as e:
+            print(f"上市清單失敗（第 {k + 1} 次）：", e); time.sleep(5)
+    for k in range(3):
+        try:
+            r = requests.get(FM_URL, params={"dataset": "TaiwanStockInfo"}, headers=fm_headers, timeout=60).json()
+            if r.get("msg") != "success":
+                raise RuntimeError(r.get("msg"))
+            for d in r["data"]:
+                sid = d["stock_id"]
+                if len(sid) == 4 and sid.isdigit() and sid[0] != "0":
+                    if d["type"] == "tpex":
+                        names[sid + ".TWO"] = d["stock_name"]
+                    elif d["type"] == "twse" and sid + ".TW" not in names:
+                        names[sid + ".TW"] = d["stock_name"]
+            break
+        except Exception as e:
+            print(f"FinMind 清單失敗（第 {k + 1} 次）：", e); time.sleep(20)
+    backup = json.load(open(UNIVERSE_FILE)) if os.path.exists(UNIVERSE_FILE) else {}
+    if len(names) < 1500:
+        print(f"⚠️ 線上股票清單不完整（{len(names)} 檔），用備份清單補（{len(backup)} 檔）")
+        names = {**backup, **names}
     if len(names) < 500:
-        sys.exit("股票清單抓取失敗")
+        sys.exit("股票清單抓取失敗（線上和備份都不夠）")
     return names
 
 
@@ -225,6 +238,37 @@ def fill_orders(ac, k, bar, today, events):
     ac["pending_buy"] = []
 
 
+
+def fm_patch(px, tickers, today, fm_headers):
+    """Yahoo 最近幾天偶爾會缺資料：用 FinMind 的日 K 補上（FinMind 優先）。只補少數重要的股票。"""
+    start = (today - timedelta(days=12)).isoformat()
+    fixed = []
+    for t in tickers:
+        try:
+            r = requests.get(FM_URL, params={"dataset": "TaiwanStockPrice", "data_id": code(t), "start_date": start,
+                                             "end_date": today.isoformat()}, headers=fm_headers, timeout=60).json()
+        except Exception:
+            continue
+        if r.get("msg") != "success" or not r.get("data"):
+            continue
+        f = pd.DataFrame(r["data"])
+        f = pd.DataFrame({"Open": f.open.values, "High": f["max"].values, "Low": f["min"].values,
+                          "Close": f.close.values, "Volume": f.Trading_Volume.values.astype(float)},
+                         index=pd.to_datetime(f.date))
+        f = f[(f.Volume > 0) & (f.Close > 0)]
+        old = px.get(t)
+        if old is None:
+            continue
+        old = old.copy(); old.index = pd.to_datetime(old.index).tz_localize(None)
+        missing = f.index.difference(old.index)
+        px[t] = pd.concat([old.drop(f.index.intersection(old.index)), f]).sort_index()
+        if len(missing):
+            fixed.append(f"{code(t)}（{', '.join(str(x.date()) for x in missing)}）")
+        time.sleep(0.3)
+    if fixed:
+        print("用 FinMind 補上 Yahoo 缺的資料：", "、".join(fixed))
+    return px
+
 # ---------------- 表格圖片 ----------------
 ROUTE_LABEL = {"A": "A", "B": "B", "AB_A": "A+B·突破", "AB_B": "A+B·月換股"}
 UP, DOWN, MUTED, FG, BG, PANEL, LINE, ACC = "#ff5c5c", "#3ecf7a", "#9aa0a8", "#e8e9eb", "#232428", "#2b2d31", "#3a3c42", "#c9a6ff"
@@ -361,6 +405,9 @@ def main():
                          (max(today, datetime.now(TW).date()) + timedelta(days=1)).isoformat())
         if cache:
             pd.to_pickle(px, cache)
+    important = {"0050.TW"} | {p["ticker"] for ac in st["accounts"].values() for p in ac["positions"]} \
+        | {c["ticker"] for ac in st["accounts"].values() for c in ac["pending_buy"]}
+    px = fm_patch(px, sorted(t for t in important if t in px), today, fmh)
     px = {t: d.loc[:pd.Timestamp(today)] for t, d in px.items()}   # 只用到 today 為止的資料（補跑舊日子時很重要）
     px = {t: d for t, d in px.items() if len(d)}
     bench = px.pop("0050.TW", None)

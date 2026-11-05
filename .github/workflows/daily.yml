@@ -60,7 +60,7 @@ jobs:
           ran=0
           for d in $days; do
             echo "=== $d ==="
-            python strategy/daily_paper.py --state run/state.json --asof "$d" --post 2>&1 | grep -v -i "possibly delisted\|failed download\|crumb"
+            python strategy/daily_paper.py --state run/state.json --asof "$d" --post 2>&1 | grep -v -i "possibly delisted\|failed download\|crumb" | tee -a run/log.txt
             code=${PIPESTATUS[0]}
             if [ "$code" = "0" ]; then ran=1
             elif [ "$code" = "3" ] || [ "$code" = "4" ]; then echo "$d 不用跑（休市、資料還沒出來或已跑過）"
@@ -91,5 +91,17 @@ jobs:
       - name: 失敗通知
         if: failure()
         run: |
-          msg="⚠️ 今天的虛擬交易執行失敗，請到 GitHub Actions 查看：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -s -H "Content-Type: application/json" -d "{\"content\": \"$msg\"}" "$DISCORD_WEBHOOK" > /dev/null
+          python - <<'PY'
+          import os, json, requests
+          tail = ""
+          try:
+              lines = [l for l in open("run/log.txt", encoding="utf-8", errors="ignore").read().splitlines() if l.strip()]
+              tail = "\n".join(lines[-4:])[-900:]
+          except Exception:
+              pass
+          url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          msg = f"⚠️ 虛擬交易執行失敗，請到 GitHub Actions 查看：{url}"
+          if tail:
+              msg += f"\n最後的訊息：\n```\n{tail}\n```"
+          requests.post(os.environ["DISCORD_WEBHOOK"], json={"content": msg[:1900]}, timeout=30)
+          PY

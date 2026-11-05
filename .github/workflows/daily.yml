@@ -48,6 +48,9 @@ jobs:
               r = requests.get("https://api.finmindtrade.com/api/v4/data", params={"dataset": "TaiwanStockInfo"},
                                headers={"Authorization": "Bearer " + tok}, timeout=60).json()
               print("FinMind token 檢查：", r.get("msg"), "（token 長度", len(tok), "）")
+              if r.get("msg") != "success":
+                  requests.post(os.environ["DISCORD_WEBHOOK"], timeout=30, json={"content":
+                      f"⚠️ FinMind token 檢查沒通過：{str(r.get('msg'))[:150]}\n請到 FinMind 複製目前的 token，更新 GitHub 的 FINMIND_TOKEN Secret。"})
           PY
 
       - name: 解密帳戶狀態

@@ -272,6 +272,62 @@ def fm_patch(px, tickers, today, fm_headers):
         print("用 FinMind 補上 Yahoo 缺的資料：", "、".join(fixed))
     return px
 
+
+def _num(x):
+    try:
+        return float(str(x).replace(",", "").strip())
+    except ValueError:
+        return float("nan")
+
+
+def official_day(day):
+    """證交所＋櫃買中心當天的官方收盤行情。回傳 (bars, names, status)。
+    status："ok"＝有資料；"closed"＝官方說當天沒有資料（休市或還沒公布）；"error"＝連不上。"""
+    bars, names, got = {}, {}, []
+    for k in range(3):
+        try:
+            j = requests.get("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX",
+                             params={"date": day.strftime("%Y%m%d"), "type": "ALLBUT0999", "response": "json"},
+                             timeout=40).json()
+            if j.get("stat") != "OK":
+                got.append("closed"); break
+            t = max(j["tables"], key=lambda t: len(t.get("data") or []))
+            f = {n: i for i, n in enumerate(t["fields"])}
+            for r in t["data"]:
+                c = r[f["證券代號"]].strip()
+                o, h, l, cl, v = (_num(r[f[x]]) for x in ["開盤價", "最高價", "最低價", "收盤價", "成交股數"])
+                if c == "0050" or (len(c) == 4 and c.isdigit() and c[0] != "0"):
+                    names[c + ".TW"] = r[f["證券名稱"]].strip()
+                    if cl == cl and v > 0:
+                        bars[c + ".TW"] = (o, h, l, cl, v)
+            got.append("ok"); break
+        except Exception as e:
+            print(f"證交所行情失敗（第 {k + 1} 次）：", str(e)[:100]); time.sleep(5)
+    else:
+        got.append("error")
+    for k in range(3):
+        try:
+            j = requests.get("https://www.tpex.org.tw/www/zh-tw/afterTrading/otc",
+                             params={"date": day.strftime("%Y/%m/%d"), "type": "EW", "response": "json"}, timeout=40).json()
+            t = max(j.get("tables") or [{}], key=lambda t: len(t.get("data") or []))
+            if not t.get("data"):
+                got.append("closed"); break
+            f = {n.strip(): i for i, n in enumerate(t["fields"])}
+            for r in t["data"]:
+                c = r[f["代號"]].strip()
+                if len(c) == 4 and c.isdigit() and c[0] != "0":
+                    o, h, l, cl, v = (_num(r[f[x]]) for x in ["開盤", "最高", "最低", "收盤", "成交股數"])
+                    names[c + ".TWO"] = r[f["名稱"]].strip()
+                    if cl == cl and v > 0:
+                        bars[c + ".TWO"] = (o, h, l, cl, v)
+            got.append("ok"); break
+        except Exception as e:
+            print(f"櫃買行情失敗（第 {k + 1} 次）：", str(e)[:100]); time.sleep(5)
+    else:
+        got.append("error")
+    status = "ok" if got == ["ok", "ok"] and len(bars) > 1000 else ("closed" if "closed" in got and "error" not in got and "ok" not in got else "error")
+    return bars, names, status
+
 # ---------------- 表格圖片 ----------------
 ROUTE_LABEL = {"A": "A", "B": "B", "AB_A": "A+B·突破", "AB_B": "A+B·月換股"}
 UP, DOWN, MUTED, FG, BG, PANEL, LINE, ACC = "#ff5c5c", "#3ecf7a", "#9aa0a8", "#e8e9eb", "#232428", "#2b2d31", "#3a3c42", "#c9a6ff"
@@ -408,6 +464,24 @@ def main():
                          (max(today, datetime.now(TW).date()) + timedelta(days=1)).isoformat())
         if cache:
             pd.to_pickle(px, cache)
+    # 當天的價格以證交所／櫃買中心官方收盤行情為準（Yahoo 最近一天常缺漏或是盤中價）
+    obars, onames, ostatus = official_day(today)
+    if ostatus == "closed":
+        print(f"NO_NEW_DATA {today} 證交所／櫃買中心沒有這天的行情（休市或還沒公布），不執行"); sys.exit(3)
+    if ostatus == "ok":
+        T0 = pd.Timestamp(today)
+        for t, (o, h, l, c, v) in obars.items():
+            d = px.get(t)
+            if d is None:
+                continue
+            d = d.loc[d.index < T0]
+            px[t] = pd.concat([d, pd.DataFrame({"Open": [o], "High": [h], "Low": [l], "Close": [c], "Volume": [v]},
+                                               index=[T0])])
+        for t, n in onames.items():
+            names.setdefault(t, n)
+        print(f"使用官方收盤行情：{len(obars)} 檔")
+    else:
+        print("⚠️ 官方行情抓不到，改用 Yahoo 的資料")
     important = {"0050.TW"} | {p["ticker"] for ac in st["accounts"].values() for p in ac["positions"]} \
         | {c["ticker"] for ac in st["accounts"].values() for c in ac["pending_buy"]}
     px = fm_patch(px, sorted(t for t in important if t in px), today, fmh)
